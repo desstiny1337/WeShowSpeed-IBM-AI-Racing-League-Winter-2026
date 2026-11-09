@@ -55,11 +55,14 @@ git push origin master
 1. Запустите TORCS, в меню **Race → Practice → Configure Race**: трасса `corkscrew` (road), пилот `scr_server`.
    Эталонная конфигурация — [`practice.xml`](practice.xml).
 2. **New Race** — TORCS ждёт клиента на UDP-порту 3001.
-3. Во втором терминале запустите драйвер, например:
+3. Во втором терминале запустите основной драйвер:
    ```bash
-   python torcs_jm_par.py
+   python snakeoil3_gym.py
    ```
-   Опции: `-p <port>`, `-m <steps>`, `-d` (полная телеметрия), `--help`.
+   Логика вождения — функция `drive_example()` в этом файле. Класс `Client` также используется
+   в `gym_torcs.py`, поэтому меняйте его осторожно.
+
+Остальные драйверы (`torcs_jm_par.py`, `jmcncarai.py`, `snakeoil3_jm2.py`) — эксперименты.
 
 Без экрана (Linux / HPC) используется vtorcs из `vtorcs-RL-color/` и конфиг [`quickrace.xml`](quickrace.xml):
 `torcs -T -c <dir> -p <port>`.
