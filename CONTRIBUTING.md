@@ -12,6 +12,19 @@ git pull --rebase origin master
 
 Всегда начинайте с актуальной версии — в репозиторий пишут несколько человек.
 
+### Окружение (один раз)
+
+Python **3.11**. Основному драйверу (`snakeoil3_gym.py`) внешние пакеты не нужны;
+для примеров RL-агента:
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate        # Linux/macOS: source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Новый пакет добавляйте в `requirements.txt` с точной версией — в том же коммите, где появился его импорт.
+
 ## 2. Каждое изменение — спецификация
 
 Любое изменение кода, параметров драйвера или конфигов гонки описывается в папке [`specs/`](specs/README.md):

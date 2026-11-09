@@ -1,0 +1,13 @@
+# Python 3.11
+#
+# The main driver (snakeoil3_gym.py) uses only the standard library:
+#   python snakeoil3_gym.py
+#
+# Packages below are for the example RL agent (sample_agent.py, example_experiment.py).
+# Install with:  pip install -r requirements.txt
+
+numpy==2.4.6
+matplotlib==3.10.9
+
+# gym_torcs.py additionally needs the legacy `gym` package and works on Linux only
+# (it launches TORCS via pkill/xte). Not installed by default.
