@@ -58,9 +58,15 @@ import sys
 import getopt
 import os
 import time
+import csv
 PI= 3.14159265359
 
 data_size = 2**17
+
+# == Telemetry logger settings (used only with --log) ==
+LOG_FLUSH_EVERY= 50       # Flush CSV to disk every N rows (50 rows ~ 1 s of driving).
+OFFTRACK_TRACKPOS= 1.0    # |trackPos| above this counts as off track.
+LOG_TRACK_AHEAD_IDX= 9    # Index of the straight-ahead range finder in 'track' (0 deg).
 
 # Initialize help messages
 ophelp=  'Options:\n'
@@ -72,6 +78,7 @@ ophelp+= ' --episodes, -e <#>   Maximum learning episodes. [1]\n'
 ophelp+= ' --track, -t <track>  Your name for this track. Used for learning. [unknown]\n'
 ophelp+= ' --stage, -s <#>      0=warm up, 1=qualifying, 2=race, 3=unknown. [3]\n'
 ophelp+= ' --debug, -d          Output full telemetry.\n'
+ophelp+= ' --log, -l <file.csv> Write per-step telemetry CSV and print a run summary.\n'
 ophelp+= ' --help, -h           Show this help.\n'
 ophelp+= ' --version, -v        Show current version.'
 usage= 'Usage: %s [ophelp [optargs]] \n' % sys.argv[0]
@@ -128,6 +135,7 @@ class Client():
         self.stage= 3 # 0=Warm-up, 1=Qualifying 2=Race, 3=unknown <Default=3>
         self.debug= False
         self.maxSteps= 100000  # 50steps/second
+        self.logFile= None # Telemetry CSV path (--log); None = no logging.
         self.parse_the_command_line()
         if H: self.host= H
         if p: self.port= p
@@ -191,9 +199,9 @@ class Client():
 
     def parse_the_command_line(self):
         try:
-            (opts, args) = getopt.getopt(sys.argv[1:], 'H:p:i:m:e:t:s:dhv',
+            (opts, args) = getopt.getopt(sys.argv[1:], 'H:p:i:m:e:t:s:l:dhv',
                        ['host=','port=','id=','steps=',
-                        'episodes=','track=','stage=',
+                        'episodes=','track=','stage=','log=',
                         'debug','help','version'])
         except getopt.error as why:
             print('getopt error: %s\n%s' % (why, usage))
@@ -219,6 +227,8 @@ class Client():
                     self.maxEpisodes= int(opt[1])
                 if opt[0] == '-m' or opt[0] == '--steps':
                     self.maxSteps= int(opt[1])
+                if opt[0] == '-l' or opt[0] == '--log':
+                    self.logFile= opt[1]
                 if opt[0] == '-v' or opt[0] == '--version':
                     print('%s %s' % (sys.argv[0], version))
                     sys.exit(0)
@@ -526,6 +536,124 @@ def destringify(s):
         else:
             return [destringify(i) for i in s]
 
+class TelemetryLogger():
+    '''Writes one CSV row per simulation step and collects a short run
+    summary (max speed, first off-track, first damage, laps). Used only
+    when the client is started with --log; the protocol part is untouched.'''
+    columns= ['step', 'curLapTime', 'lastLapTime', 'distFromStart',
+              'distRaced', 'speedX', 'speedY', 'trackPos', 'angle',
+              'track_ahead', 'track_min', 'rpm', 'gear', 'damage',
+              'steer', 'accel', 'brake', 'gear_cmd']
+
+    def __init__(self, path):
+        self.path= path
+        folder= os.path.dirname(path)
+        if folder and not os.path.isdir(folder):
+            os.makedirs(folder)
+        self.f= open(path, 'w', newline='', encoding='utf-8')
+        self.w= csv.writer(self.f)
+        self.w.writerow(self.columns)
+        self.closed= False
+        # Summary state.
+        self.steps= 0
+        self.last= None             # Last logged sensor snapshot (dict).
+        self.max_speed= None        # (speedX, distFromStart, curLapTime)
+        self.first_offtrack= None   # (distFromStart, speedX, curLapTime, step)
+        self.offtrack_steps= 0
+        self.offtrack_events= 0     # Number of separate excursions.
+        self.was_offtrack= False
+        self.first_damage= None     # (distFromStart, speedX, curLapTime, step, damage)
+        self.prev_damage= None
+        self.prev_last_lap= None
+        self.laps= []               # Completed lap times, s.
+
+    def log(self, S, R):
+        '''S = server state dict (c.S.d), R = driver action dict (c.R.d).'''
+        self.steps+= 1
+        track= S.get('track')
+        if type(track) is list and len(track) > LOG_TRACK_AHEAD_IDX:
+            track_ahead= track[LOG_TRACK_AHEAD_IDX]
+            track_min= min(track)
+        else:
+            track_ahead, track_min= '', ''
+        cur_lap= S.get('curLapTime', 0)
+        last_lap= S.get('lastLapTime', 0)
+        dfs= S.get('distFromStart', 0)
+        speed= S.get('speedX', 0)
+        tpos= S.get('trackPos', 0)
+        damage= S.get('damage', 0)
+        self.w.writerow([self.steps, cur_lap, last_lap, dfs,
+                         S.get('distRaced', ''), speed, S.get('speedY', ''),
+                         tpos, S.get('angle', ''), track_ahead, track_min,
+                         S.get('rpm', ''), S.get('gear', ''), damage,
+                         R.get('steer', ''), R.get('accel', ''),
+                         R.get('brake', ''), R.get('gear', '')])
+        if self.steps % LOG_FLUSH_EVERY == 0:
+            self.f.flush()
+        # -- Summary bookkeeping --
+        self.last= dict(S)
+        if self.max_speed is None or speed > self.max_speed[0]:
+            self.max_speed= (speed, dfs, cur_lap)
+        off= abs(tpos) > OFFTRACK_TRACKPOS
+        if off:
+            self.offtrack_steps+= 1
+            if not self.was_offtrack:
+                self.offtrack_events+= 1
+            if self.first_offtrack is None:
+                self.first_offtrack= (dfs, speed, cur_lap, self.steps)
+        self.was_offtrack= off
+        if self.prev_damage is not None and damage > self.prev_damage:
+            if self.first_damage is None:
+                self.first_damage= (dfs, speed, cur_lap, self.steps, damage)
+        self.prev_damage= damage
+        # A lap is completed when lastLapTime changes to a new positive value.
+        if self.prev_last_lap is not None and last_lap != self.prev_last_lap and last_lap > 0:
+            self.laps.append(last_lap)
+        self.prev_last_lap= last_lap
+
+    def summary(self):
+        out= ['===== Run summary (%s) =====' % self.path]
+        out.append('steps logged:     %d (~%.1f s)' % (self.steps, self.steps / 50.0))
+        if not self.steps:
+            out.append('no data received from server.')
+            return '\n'.join(out)
+        L= self.last
+        out.append('distRaced total:  %.1f m' % L.get('distRaced', 0))
+        out.append('last position:    distFromStart %.1f m, curLapTime %.2f s'
+                   % (L.get('distFromStart', 0), L.get('curLapTime', 0)))
+        out.append('max speedX:       %.1f km/h at distFromStart %.1f m (curLapTime %.2f s)'
+                   % self.max_speed)
+        if self.first_offtrack:
+            out.append('first off-track:  distFromStart %.1f m, speedX %.1f km/h, curLapTime %.2f s (step %d)'
+                       % self.first_offtrack)
+        else:
+            out.append('first off-track:  none')
+        out.append('off-track steps:  %d (%d excursions, |trackPos| > %.2f)'
+                   % (self.offtrack_steps, self.offtrack_events, OFFTRACK_TRACKPOS))
+        if self.first_damage:
+            out.append('first damage:     distFromStart %.1f m, speedX %.1f km/h, curLapTime %.2f s (step %d, damage %.0f)'
+                       % self.first_damage)
+        else:
+            out.append('first damage:     none')
+        out.append('total damage:     %.0f' % L.get('damage', 0))
+        if self.laps:
+            out.append('laps completed:   %d -> %s' % (len(self.laps),
+                       ', '.join(['%.3f s' % t for t in self.laps])))
+            out.append('best lap:         %.3f s' % min(self.laps))
+        else:
+            out.append('laps completed:   0')
+        return '\n'.join(out)
+
+    def close(self):
+        '''Flush and close the CSV, print the summary. Safe to call twice.'''
+        if self.closed: return
+        self.closed= True
+        try:
+            self.f.flush()
+            self.f.close()
+        finally:
+            print(self.summary())
+
 def drive_example(c):
     '''This is only an example. It will get around the track but the
     correct thing to do is write your own `drive()` function.'''
@@ -567,8 +695,17 @@ def drive_example(c):
 # ================ MAIN ================
 if __name__ == "__main__":
     C= Client(p=3001)
-    for step in range(C.maxSteps,0,-1):
-        C.get_servers_input()
-        drive_example(C)
-        C.respond_to_server()
+    logger= TelemetryLogger(C.logFile) if C.logFile else None
+    try:
+        for step in range(C.maxSteps,0,-1):
+            C.get_servers_input()
+            drive_example(C)
+            C.respond_to_server()
+            # After a server shutdown C.so is None and S.d is stale: skip it.
+            if logger is not None and C.so is not None:
+                logger.log(C.S.d, C.R.d)
+    finally:
+        # Runs on normal end, server shutdown and Ctrl+C alike.
+        if logger is not None:
+            logger.close()
     C.shutdown()
