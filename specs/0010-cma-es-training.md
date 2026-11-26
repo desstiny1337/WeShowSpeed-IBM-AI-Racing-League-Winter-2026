@@ -6,7 +6,7 @@
 | Автор   | Hlib                              |
 | Дата    | 2026-11-26                        |
 | Файлы   | `train_cma.py` (новый), `params/search_space.json` (новый), `hpc/train_cma.sbatch` (новый), `hpc/setup_pylib.sh` (новый), `hpc/README.md` (новый), `hpc/torcs-env.def` (новый в репо, копия рецепта образа с кластера), `.gitattributes` (новый), `.gitignore`, `requirements.txt` |
-| Коммиты | (заполняет git-агент)             |
+| Коммиты | 5751b57                           |
 
 ## Запрос / мотивация
 После 0009 есть `fitness.py`: один набор параметров → одно число (сумма «эквивалентных» времён круга на
