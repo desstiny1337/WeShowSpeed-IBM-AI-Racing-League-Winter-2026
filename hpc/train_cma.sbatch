@@ -46,7 +46,7 @@ mkdir -p "$HOME" "$OUTDIR" "$SCRATCH/cma_logs"
 
 RESUME=()
 if [ -f "$OUTDIR/checkpoint.pkl" ]; then
-    RESUME=(--resume)
+    RESUME=(--resume --port-check-on-resume)
 fi
 
 echo "job ${SLURM_JOB_ID:-} on $(hostname), $(date)"
@@ -54,8 +54,12 @@ echo "code $CODE_DIR ($(cd "$CODE_DIR" && git rev-parse --short HEAD 2>/dev/null
 echo "outdir $OUTDIR ${RESUME[*]:-}"
 
 cd "$CODE_DIR"
+# All scr_server slots must drive the same car (spec 0011): the image maps
+# ports 3002-3010 to car1-trb1, our copy maps every port to car1-ow1.
+SCR_XML=/usr/local/torcs/share/games/torcs/drivers/scr_server/scr_server.xml
 # exec: SIGTERM from SLURM goes straight to apptainer -> train_cma.py
 # (it stops the running evaluations and exits; checkpoint = last full generation).
-exec apptainer exec --home "$HOME" --bind "$SCRATCH,$PROJECT" "$SIF" \
+exec apptainer exec --home "$HOME" --bind "$SCRATCH,$PROJECT" \
+    --bind "$CODE_DIR/hpc/scr_server.xml:$SCR_XML:ro" "$SIF" \
     python3 -u train_cma.py --outdir "$OUTDIR" --workers "$WORKERS" --max-hours "$MAX_HOURS" \
     ${RESUME[@]+"${RESUME[@]}"} "$@"

@@ -4,6 +4,7 @@
 
 | Дата       | Спека | Автор  | Кратко                                   | Статус |
 |------------|-------|--------|------------------------------------------|--------|
+| 2026-11-26 | [0011](0011-same-car-all-ports.md) | Hlib   | В образе порты 3002–3010 были на `car1-trb1`: `hpc/scr_server.xml` (все слоты `car1-ow1`) + bind в sbatch, проверка портов в gen 0 `train_cma.py` (код 3), шире границы поиска | done |
 | 2026-11-26 | [0010](0010-cma-es-training.md) | Hlib   | `train_cma.py`: CMA-ES по 18 параметрам, 10 параллельных оценок `fitness.py`, контрольные точки; SLURM-задача и установка numpy/cma для PERUN | done |
 | 2026-11-26 | [0009](0009-fitness-evaluator.md) | Hlib   | `fitness.py`: прогон параметров на 8 трассах (`torcs -r`), разбор CSV, один балл `FITNESS`; фикс `-p` в `snakeoil3_gym.py` | done |
 | 2026-11-26 | [0008](0008-brake-and-params.md) | Hlib   | Торможение по дальномерам, ABS/TCS, передачи по rpm, выезд/задний ход; `DEFAULT_PARAMS` + `--params file.json` | done |

@@ -13,10 +13,16 @@ parameters are fixed to the values of --base. The search runs in the
 normalized cube [0,1]^n (CMA bounds [0,1]); integer parameters are rounded
 when a candidate is written.
 
+Gen 0 of a new run evaluates the base params on every worker port at once;
+if the fitness differs between ports by more than --port-check-tol (the
+scr_server slots are not identical, e.g. another car) the run exits with
+code 3 before CMA starts (spec 0011).
+
 Outputs in --outdir:
     run_config.json         arguments, search space, base params
     generations.csv         one row per generation (gen 0 = base params)
     candidates.jsonl        one line per evaluated candidate
+    port_check.json         base params evaluated on every port (spec 0011)
     best.json               best full params dict (usable with snakeoil3_gym.py --params)
     best_result.json        fitness.py result JSON of best.json
     checkpoint.pkl          CMA state, written after every generation (--resume)
@@ -60,6 +66,8 @@ KILL_GRACE_S= 10.0        # s between SIGTERM and SIGKILL for fitness.py (it sto
 POLL_S= 0.2               # s between polls of a running evaluation.
 MAX_FAILED_LOGS= 200      # keep at most this many logs of failed evaluations.
 GEN_TIME_MARGIN= 1.2      # --max-hours: next generation must fit in remaining * 1/margin.
+PORT_CHECK_TOL= 1.0       # max fitness spread of the base params across ports (TORCS is deterministic).
+PORT_CHECK_EXIT= 3        # exit code when the port check fails.
 CHECKPOINT_VERSION= 1
 
 POSIX= os.name == 'posix'
@@ -246,6 +254,11 @@ class Evaluator:
         finally:
             self.ports.put(port)
 
+    def evaluate_on(self, port, tag, params):
+        '''Run on the given port, bypassing the port queue. Only while no
+        evaluate() call is running (port check before/after CMA generations).'''
+        return self._run(port, tag, params)
+
     def _terminate(self, p):
         try:
             if POSIX:
@@ -362,6 +375,56 @@ def track_summary(result):
              'offtrack_s': t.get('offtrack_s')} for t in result.get('tracks', [])]
 
 
+def port_check(ev, pool, ports, params, tag, tol, path):
+    '''Evaluate the same params once on every port in parallel (one wave).
+    TORCS is deterministic, so all ports must give the same fitness; a spread
+    means the scr_server slots differ (e.g. another car on some ports, spec 0011).
+    Returns (verdict, results in port order); verdict is one of
+    ok, mismatch, some_failed, all_failed, stopped. Writes a summary to path.'''
+    futures= [pool.submit(ev.evaluate_on, p, '%s_p%d' % (tag, p), params) for p in ports]
+    pending= set(futures)
+    while pending:
+        done, pending= wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+    results= [f.result() for f in futures]
+    for r in results:
+        log('port check: port %d %-10s fitness %12.3f (%.1f s)' % (r['port'], r['status'], r['fitness'], r['wall_s']))
+    fits= [r['fitness'] for r in results if r['status'] == 'ok']
+    spread= max(fits) - min(fits) if fits else None
+    if any(r['status'] == 'stopped' for r in results):
+        verdict= 'stopped'
+    elif not fits:
+        verdict= 'all_failed'
+    elif len(fits) < len(results):
+        verdict= 'some_failed'
+    elif spread > tol:
+        verdict= 'mismatch'
+    else:
+        verdict= 'ok'
+    write_json(path, {'tag': tag, 'verdict': verdict, 'tol': tol, 'spread': spread,
+                      'checked': time.strftime('%Y-%m-%dT%H:%M:%S'),
+                      'ports': [{'port': r['port'], 'status': r['status'], 'fitness': r['fitness'],
+                                 'wall_s': round(r['wall_s'], 2), 'tracks': track_summary(r['result'])}
+                                for r in results]})
+    if verdict == 'ok':
+        log('port check passed: %d ports, spread %.3f <= tol %g' % (len(results), spread, tol))
+    return verdict, results
+
+
+def port_check_error(verdict, results, tol, path):
+    per_port= ', '.join('%d=%s' % (r['port'], '%.3f' % r['fitness'] if r['status'] == 'ok' else r['status'])
+                        for r in results)
+    if verdict == 'mismatch':
+        fits= [r['fitness'] for r in results]
+        what= 'the same params give different fitness on different ports (spread %.3f > tol %g)' % (
+            max(fits) - min(fits), tol)
+    else:
+        what= 'evaluation failed on some ports (logs in failed/)'
+    log('ERROR: port check failed: %s: %s. Every scr_server slot must use the same car '
+        '(scr_server.xml, spec 0011); details in %s. Disable the check: --skip-port-check '
+        '(new run) or no --port-check-on-resume (--resume).'
+        % (what, per_port, path))
+
+
 # ---------------------------------------------------------------- run state
 
 class Run:
@@ -430,6 +493,13 @@ def build_parser():
     ap.add_argument('--python', default=None, help='command to run fitness.py (shlex split) [this interpreter]')
     ap.add_argument('--fitness-script', default=os.path.join(HERE, 'fitness.py'),
                     help='evaluator script, must accept the fitness.py arguments (for tests) [%(default)s]')
+    ap.add_argument('--port-check-tol', type=float, default=PORT_CHECK_TOL,
+                    help='gen 0 evaluates the base params on every worker port; exit with code 3 if '
+                         'max - min fitness > this [%(default)s]')
+    ap.add_argument('--skip-port-check', action='store_true',
+                    help='new run: evaluate the base params once (no per-port check)')
+    ap.add_argument('--port-check-on-resume', action='store_true',
+                    help='--resume: run the port check with the base params of the run before continuing')
     ap.add_argument('--dry-run', action='store_true',
                     help='no evaluations: print the search space, write base + 3 random candidates to '
                          '<outdir>/dry_run/ and validate them (no numpy/cma needed)')
@@ -472,6 +542,8 @@ def main(argv=None):
         ap.error('--sigma0 must be > 0')
     if args.laps < 1:
         ap.error('--laps must be >= 1')
+    if not args.port_check_tol >= 0:
+        ap.error('--port-check-tol must be >= 0')
     args.fitness_script= os.path.abspath(args.fitness_script)
     if not os.path.isfile(args.fitness_script):
         ap.error('fitness script not found: %s' % args.fitness_script)
@@ -565,25 +637,41 @@ def main(argv=None):
                 'argv': sys.argv, 'args': vars(args), 'space': space.as_dict(), 'base': base,
                 'started': time.strftime('%Y-%m-%dT%H:%M:%S')})
             write_json(run.path('base.json'), base)
-            log('gen 0: evaluating base params %s' % args.base)
-            r= ev.evaluate('g0000_base', base)
-            if r['status'] != 'ok':
+            if args.skip_port_check or len(ports) == 1:
+                log('gen 0: evaluating base params %s%s' % (args.base, ' (port check skipped)'
+                    if args.skip_port_check else ' (1 port, no port check)'))
+                results= [ev.evaluate('g0000_base', base)]
+                verdict= 'ok' if results[0]['status'] == 'ok' else (
+                    'stopped' if stop_event.is_set() else 'all_failed')
+            else:
+                log('gen 0: evaluating base params %s on all %d ports (port check, tol %g)'
+                    % (args.base, len(ports), args.port_check_tol))
+                verdict, results= port_check(ev, pool, ports, base, 'g0000_base', args.port_check_tol,
+                                             run.path('port_check.json'))
+            r= results[0]  # first port (3001) = reference, as before
+            if verdict != 'ok':
                 if stop_event.is_set():
                     log('stopped during gen 0 (%s)' % ', '.join(stop_reason))
                     return 0
-                log('ERROR: base evaluation failed (%s), see %s; aborting'
-                    % (r['status'], os.path.join(outdir, 'failed')))
-                return 1
+                if verdict == 'all_failed':
+                    log('ERROR: base evaluation failed (%s), see %s; aborting'
+                        % (r['status'], os.path.join(outdir, 'failed')))
+                    return 1
+                port_check_error(verdict, results, args.port_check_tol, run.path('port_check.json'))
+                return PORT_CHECK_EXIT
             f0= r['fitness']
+            fits0= [x['fitness'] for x in results]
             wall= time.time() - t_start
-            run.append_candidates([{'gen': 0, 'idx': 0, 'fitness': f0, 'status': r['status'],
-                                    'wall_s': round(r['wall_s'], 2),
+            run.append_candidates([{'gen': 0, 'idx': i, 'fitness': x['fitness'], 'status': x['status'],
+                                    'wall_s': round(x['wall_s'], 2), 'port': x['port'],
                                     'params': {k: base[k] for k in space.names},
-                                    'tracks': track_summary(r['result'])}])
-            run.append_generation({'gen': 0, 'evals': 1, 'best': f0, 'median': f0, 'worst': f0,
+                                    'tracks': track_summary(x['result'])}
+                                   for i, x in enumerate(results)])
+            run.append_generation({'gen': 0, 'evals': len(results), 'best': min(fits0),
+                                   'median': statistics.median(fits0), 'worst': max(fits0),
                                    'sigma': args.sigma0, 'best_so_far': f0, 'wall_s': wall})
             run.write_best(base, r['result'])
-            log('gen    0 evals     1 base %.3f (%.1f s)' % (f0, r['wall_s']))
+            log('gen    0 evals %5d base %.3f (port %d, %.1f s)' % (len(results), f0, r['port'], r['wall_s']))
 
             opts= {'bounds': [0.0, 1.0], 'popsize': args.popsize, 'verbose': -9,
                    'verb_disp': 0, 'verb_log': 0}
@@ -591,14 +679,30 @@ def main(argv=None):
                 opts['seed']= args.seed
             opts.update(cma_opts_extra)
             es= cma.CMAEvolutionStrategy(space.normalize(base), args.sigma0, opts)
-            st= {'version': CHECKPOINT_VERSION, 'gen': 0, 'evals': 1, 'best_f': f0, 'best_params': base,
+            st= {'version': CHECKPOINT_VERSION, 'gen': 0, 'evals': len(results), 'best_f': f0, 'best_params': base,
                  'base': base, 'base_f': f0, 'space': space.as_dict(), 'wall_used': wall,
                  'tracks': args.tracks, 'laps': args.laps, 'fitness_args': args.fitness_args,
-                 'seed': es.opts['seed'], 'last_gen_s': r['wall_s'] * math.ceil(args.popsize / float(len(ports)))}
+                 'seed': es.opts['seed'],
+                 'last_gen_s': max(x['wall_s'] for x in results) * math.ceil(args.popsize / float(len(ports)))}
             st['es']= es
             st['np_random_state']= np.random.get_state()
             write_pickle(ckpt_path, st)
             log('CMA-ES: n=%d popsize=%d sigma0=%g seed=%s' % (len(space), es.popsize, args.sigma0, es.opts['seed']))
+        elif args.port_check_on_resume and len(ports) > 1:
+            # -- Resume: same check with the base params of the run (nothing written to CSV/JSONL) --
+            log('resume: port check with the base params of the run on all %d ports (tol %g)'
+                % (len(ports), args.port_check_tol))
+            verdict, results= port_check(ev, pool, ports, base, 'resume_g%04d_base' % st['gen'],
+                                         args.port_check_tol, run.path('port_check.json'))
+            if verdict == 'stopped':
+                log('stopped during the port check (%s)' % ', '.join(stop_reason))
+                return 0
+            if verdict != 'ok':
+                port_check_error(verdict, results, args.port_check_tol, run.path('port_check.json'))
+                return PORT_CHECK_EXIT
+            if abs(results[0]['fitness'] - st['base_f']) > args.port_check_tol:
+                log('WARNING: base params now score %.3f, gen 0 of the run scored %.3f; '
+                    'fitness of old and new generations is not comparable' % (results[0]['fitness'], st['base_f']))
 
         wall_before= st['wall_used']
         t_run= time.time()
