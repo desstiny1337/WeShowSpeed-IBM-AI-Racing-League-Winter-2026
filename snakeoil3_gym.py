@@ -834,7 +834,7 @@ def drive_example(c, params=None):
 
 # ================ MAIN ================
 if __name__ == "__main__":
-    C= Client(p=3001)
+    C= Client() # Port from -p/--port (default 3001); Client(p=3001) overrode -p.
     params_src= C.paramsFile if C.paramsFile else 'defaults'
     print('params (%s): %s' % (params_src, json.dumps(C.params, sort_keys=True)))
     logger= TelemetryLogger(C.logFile) if C.logFile else None
