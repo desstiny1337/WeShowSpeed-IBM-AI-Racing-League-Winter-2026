@@ -6,7 +6,7 @@
 | Автор   | Hlib                              |
 | Дата    | 2026-11-26                        |
 | Файлы   | `train_cma.py`, `hpc/scr_server.xml` (новый), `hpc/train_cma.sbatch`, `params/search_space.json`, `.gitattributes` |
-| Коммиты | (заполняет git-агент)             |
+| Коммиты | 046afa8                           |
 
 ## Запрос / мотивация
 Разбор прогонов CMA-ES на PERUN (0010) 2026-11-26 показал, что оптимизатор ранжировал кандидатов
