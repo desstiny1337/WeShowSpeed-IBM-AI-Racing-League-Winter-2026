@@ -70,6 +70,19 @@ LOG_FLUSH_EVERY= 50       # Flush CSV to disk every N rows (50 rows ~ 1 s of dri
 OFFTRACK_TRACKPOS= 1.0    # |trackPos| above this counts as off track.
 LOG_TRACK_AHEAD_IDX= 9    # Index of the straight-ahead range finder in 'track' (0 deg).
 
+# == Gearbox without wheelspin hunting (spec 0017) ==
+# With rear wheelspin in 1st gear the raw rpm hits gear_up_rpm while the car is slow;
+# after the upshift rpm is below gear_down_rpm and the box jumps 1<->2 forever.
+# So the driver learns each gear's ratio rpm / rear-wheel speed (rad/s) while driving
+# and computes the no-slip rpm = car speed / rear radius * ratio. Shifts still use the
+# real rpm (as in spec 0008); the no-slip rpm only vetoes a shift that would be undone
+# at once: no upshift if the next gear would be below gear_down_rpm, no downshift if
+# the lower gear would be above gear_up_rpm - margin. Normal driving is unchanged.
+GEAR_DOWN_MARGIN_RPM= 300.0  # No-slip rpm after a downshift must be < gear_up_rpm - this.
+GEAR_LEARN_MIN_STEPS= 10     # Learn a ratio only after this many steps in the same gear (clutch closed).
+GEAR_LEARN_MIN_SPEED= 20.0   # km/h, learn a ratio only above this speed.
+GEAR_LEARN_RATE= 0.2         # Weight of a new sample in the ratio's running average.
+
 # == Driver parameters (spec 0008; values from CMA-ES run3, spec 0015) ==
 # Every tunable number of drive_example() lives here. Override any subset with
 # --params <file.json>. params/run3_best.json = these values; params/default.json =
@@ -823,13 +836,39 @@ def drive_example(c, params=None):
 
     # -- Automatic transmission by rpm --
     gear= int(S['gear'])
+    rpm= S['rpm']
     gear_max= int(clip(round(P['gear_max']), 1, 6))
+    # Learn rpm / rear-wheel speed for the current gear (spec 0017).
+    ratios= st.setdefault('gear_ratio', {})
+    if gear == st.get('gear_prev'):
+        st['gear_steps']= st.get('gear_steps', 0) + 1
+    else:
+        st['gear_steps']= 0
+    st['gear_prev']= gear
+    omega_r= (wsv[2] + wsv[3]) / 2   # rad/s, rear (driven) wheels
+    # rpm / wheel speed stays valid under wheelspin (engine and wheels are coupled);
+    # only right after a shift (clutch slipping) it is not, hence GEAR_LEARN_MIN_STEPS;
+    # under braking near-locked wheels let the engine sit at idle, hence brake == 0.
+    if (gear >= 1 and st['gear_steps'] >= GEAR_LEARN_MIN_STEPS and brake == 0
+            and speed > GEAR_LEARN_MIN_SPEED and omega_r > 1.0):
+        sample= rpm / omega_r
+        old= ratios.get(gear)
+        ratios[gear]= sample if old is None else old + GEAR_LEARN_RATE*(sample - old)
+    omega_car= max(v_ms, 0.0) / rr   # rad/s the rear wheels would have without slip
+    upper= ratios.get(gear + 1)
     if gear < 1:
         gear= 1
-    elif S['rpm'] > P['gear_up_rpm'] and gear < gear_max:
+    elif (rpm > P['gear_up_rpm'] and gear < gear_max
+            and (upper is None or omega_car * upper >= P['gear_down_rpm'])):
+        # Up unless the next gear would be below the downshift rpm (wheelspin in this
+        # gear inflates rpm; unknown ratio -> allow, the shift then teaches it).
         gear+= 1
-    elif S['rpm'] < P['gear_down_rpm'] and gear > 1:
-        gear-= 1
+    elif rpm < P['gear_down_rpm'] and gear > 1:
+        # Down only if the lower gear would not be above the upshift rpm
+        # (unknown ratio -> allow, the shift then teaches it).
+        lower= ratios.get(gear - 1)
+        if lower is None or omega_car * lower < P['gear_up_rpm'] - GEAR_DOWN_MARGIN_RPM:
+            gear-= 1
     R['gear']= min(gear, gear_max)
     return
 
