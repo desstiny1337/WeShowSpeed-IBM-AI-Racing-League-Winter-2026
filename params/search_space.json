@@ -1,0 +1,21 @@
+{
+    "_comment": "CMA-ES search space for train_cma.py (spec 0010, bounds widened in 0011): {param: [low, high]}. Keys starting with _ are ignored. Params not listed are fixed from --base.",
+    "v_corner": [40.0, 160.0],
+    "decel": [6.0, 30.0],
+    "dist_margin": [0.0, 40.0],
+    "ahead_halfwidth": [0, 5],
+    "curv_speed_gain": [0.0, 5.0],
+    "accel_gain": [0.01, 0.5],
+    "brake_gain": [0.02, 0.5],
+    "abs_slip": [0.05, 0.4],
+    "abs_gain": [0.0, 10.0],
+    "tcs_slip": [0.05, 0.4],
+    "tcs_gain": [0.0, 10.0],
+    "steer_angle_gain": [1.5, 8.0],
+    "steer_pos_gain": [0.0, 0.6],
+    "steer_ray_gain": [0.0, 3.0],
+    "gear_up_rpm": [15000.0, 18600.0],
+    "gear_down_rpm": [7000.0, 13000.0],
+    "offtrack_speed": [20.0, 100.0],
+    "offtrack_pos_gain": [0.1, 1.0]
+}

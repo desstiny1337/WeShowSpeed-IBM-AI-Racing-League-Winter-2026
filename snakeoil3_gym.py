@@ -59,6 +59,8 @@ import getopt
 import os
 import time
 import csv
+import json
+import math
 PI= 3.14159265359
 
 data_size = 2**17
@@ -67,6 +69,90 @@ data_size = 2**17
 LOG_FLUSH_EVERY= 50       # Flush CSV to disk every N rows (50 rows ~ 1 s of driving).
 OFFTRACK_TRACKPOS= 1.0    # |trackPos| above this counts as off track.
 LOG_TRACK_AHEAD_IDX= 9    # Index of the straight-ahead range finder in 'track' (0 deg).
+
+# == Gearbox without wheelspin hunting (spec 0017) ==
+# With rear wheelspin in 1st gear the raw rpm hits gear_up_rpm while the car is slow;
+# after the upshift rpm is below gear_down_rpm and the box jumps 1<->2 forever.
+# So the driver learns each gear's ratio rpm / rear-wheel speed (rad/s) while driving
+# and computes the no-slip rpm = car speed / rear radius * ratio. Shifts still use the
+# real rpm (as in spec 0008); the no-slip rpm only vetoes a shift that would be undone
+# at once: no upshift if the next gear would be below gear_down_rpm, no downshift if
+# the lower gear would be above gear_up_rpm - margin. Normal driving is unchanged.
+GEAR_DOWN_MARGIN_RPM= 300.0  # No-slip rpm after a downshift must be < gear_up_rpm - this.
+GEAR_LEARN_MIN_STEPS= 10     # Learn a ratio only after this many steps in the same gear (clutch closed).
+GEAR_LEARN_MIN_SPEED= 20.0   # km/h, learn a ratio only above this speed.
+GEAR_LEARN_RATE= 0.2         # Weight of a new sample in the ratio's running average.
+
+# == Driver parameters (spec 0008; values from CMA-ES run4, spec 0018) ==
+# Every tunable number of drive_example() lives here. Override any subset with
+# --params <file.json>. params/run4_best.json = these values (run3_best.json = previous
+# defaults, spec 0015); params/default.json =
+# the hand-tuned spec 0008 baseline (training reference). Units: speeds km/h, distances m.
+DEFAULT_PARAMS= {
+    # -- Target speed from the track range finders --
+    'v_max': 300.0,             # km/h, upper clamp of the target speed.
+    'v_min': 50.0,              # km/h, lower clamp of the target speed while on track.
+    'v_corner': 57.752001020552015,           # km/h, speed we want to have when reaching the obstacle seen ahead.
+    'decel': 27.878414834990394,              # m/s^2, assumed braking deceleration in v^2 = v_corner^2 + 2*decel*d.
+    'dist_margin': 15.511348189467423,        # m, safety margin subtracted from the free distance ahead.
+    'ahead_halfwidth': 5,       # int, distance ahead = max(track[9-k .. 9+k]) (k=2 -> +-1 deg).
+    'curv_speed_gain': 8.325583762439247e-05,     # km/h subtracted per degree of the longest-ray direction (0 = off).
+    # -- Throttle / brake --
+    'accel_gain': 0.10426941535712027,          # throttle per km/h below (target + brake_hyst).
+    'brake_gain': 0.2402250043132813,          # brake per km/h above target (10 km/h over -> full brake).
+    'brake_hyst': 2.0,          # km/h, dead band above target before braking starts.
+    'wheel_radius_front': 0.3024,  # m, car1-ow1 front wheel (12" rim + 150 mm tyre).
+    'wheel_radius_rear': 0.3151,   # m, car1-ow1 rear wheel (13" rim + 150 mm tyre).
+    'abs_slip': 0.060367580055072353,           # ABS: wheel slip (v_car - v_wheel)/v_car above which brake is reduced.
+    'abs_gain': 4.145926782177537,           # ABS: brake *= 1 - abs_gain*(slip - abs_slip), clipped to 0..1.
+    'abs_min_speed': 10.0,      # km/h, ABS is off below this speed.
+    'tcs_slip': 0.0920453641602677,           # TCS: rear slip (v_wheel - v_car)/v_car above which throttle is reduced.
+    'tcs_gain': 3.9660492012787345,           # TCS: accel *= 1 - tcs_gain*(slip - tcs_slip), clipped to 0..1.
+    'tcs_min_speed': 10.0,      # km/h, TCS is off below this speed (lets the car launch).
+    # -- Steering (steer > 0 = left) --
+    'steer_angle_gain': 1.5810842554700182,  # steer per rad of 'angle' (old value 15/PI).
+    'steer_pos_gain': 0.10390953889830494,     # steer per unit of trackPos (pulls to the centre).
+    'steer_ray_gain': 2.9285829425079637,     # steer per rad toward the longest range finder (0 = off).
+    # -- Gears (by rpm; car1-ow1 rev limiter 18700) --
+    'gear_up_rpm': 18596.269291505545,     # shift up above this rpm.
+    'gear_down_rpm': 11772.564084414826,  # shift down below this rpm.
+    'gear_max': 6,              # int, highest gear used (1..6).
+    # -- Off-track recovery (|trackPos| > 1) --
+    'offtrack_speed': 74.94514524264667,     # km/h, target speed cap while off track.
+    'offtrack_pos_gain': 0.5428221356621783,  # steer per unit of trackPos while off track (replaces steer_pos_gain).
+    # -- Stuck recovery (reverse) --
+    'stuck_speed': 5.0,         # km/h, |speedX| below this counts as not moving.
+    'stuck_angle': 0.5236,      # rad (30 deg), |angle| above this counts as badly turned.
+    'stuck_steps': 100,         # int, steps (~2 s) not moving + turned before reversing.
+    'reverse_steps': 100,       # int, steps to drive in reverse gear.
+    'reverse_accel': 0.5,       # throttle while reversing.
+    'reverse_steer_gain': 1.0,  # steer = -gain*angle while reversing (inverted).
+}
+# Angles (deg) of the 19 'track' range finders; must match the init string in
+# Client.setup_connection(). Negative = left of the car axis, positive = right.
+TRACK_SENSOR_ANGLES= [-45, -19, -12, -7, -4, -2.5, -1.7, -1, -.5, 0,
+                      .5, 1, 1.7, 2.5, 4, 7, 12, 19, 45]
+
+def load_params(path):
+    '''Load a JSON object from `path` and return DEFAULT_PARAMS overridden by
+    it. Raises ValueError on unreadable file, unknown keys or non-numbers.'''
+    try:
+        with open(path, encoding='utf-8') as f:
+            data= json.load(f)
+    except (OSError, ValueError) as why:
+        raise ValueError('cannot read params file %s: %s' % (path, why))
+    if not isinstance(data, dict):
+        raise ValueError('params file %s must contain a JSON object' % path)
+    unknown= sorted(set(data) - set(DEFAULT_PARAMS))
+    if unknown:
+        raise ValueError('unknown parameter(s) in %s: %s\nknown: %s' % (
+            path, ', '.join(unknown), ', '.join(sorted(DEFAULT_PARAMS))))
+    P= dict(DEFAULT_PARAMS)
+    for k, v in data.items():
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ValueError('parameter %s in %s must be a number, got %r' % (k, path, v))
+        P[k]= v
+    return P
 
 # Initialize help messages
 ophelp=  'Options:\n'
@@ -79,6 +165,7 @@ ophelp+= ' --track, -t <track>  Your name for this track. Used for learning. [un
 ophelp+= ' --stage, -s <#>      0=warm up, 1=qualifying, 2=race, 3=unknown. [3]\n'
 ophelp+= ' --debug, -d          Output full telemetry.\n'
 ophelp+= ' --log, -l <file.csv> Write per-step telemetry CSV and print a run summary.\n'
+ophelp+= ' --params, -P <file.json> Override driver parameters (see params/default.json).\n'
 ophelp+= ' --help, -h           Show this help.\n'
 ophelp+= ' --version, -v        Show current version.'
 usage= 'Usage: %s [ophelp [optargs]] \n' % sys.argv[0]
@@ -136,6 +223,8 @@ class Client():
         self.debug= False
         self.maxSteps= 100000  # 50steps/second
         self.logFile= None # Telemetry CSV path (--log); None = no logging.
+        self.paramsFile= None # Driver params JSON (--params); None = DEFAULT_PARAMS.
+        self.params= dict(DEFAULT_PARAMS) # Effective driver params used by drive_example().
         self.parse_the_command_line()
         if H: self.host= H
         if p: self.port= p
@@ -199,9 +288,9 @@ class Client():
 
     def parse_the_command_line(self):
         try:
-            (opts, args) = getopt.getopt(sys.argv[1:], 'H:p:i:m:e:t:s:l:dhv',
+            (opts, args) = getopt.getopt(sys.argv[1:], 'H:p:i:m:e:t:s:l:P:dhv',
                        ['host=','port=','id=','steps=',
-                        'episodes=','track=','stage=','log=',
+                        'episodes=','track=','stage=','log=','params=',
                         'debug','help','version'])
         except getopt.error as why:
             print('getopt error: %s\n%s' % (why, usage))
@@ -229,6 +318,13 @@ class Client():
                     self.maxSteps= int(opt[1])
                 if opt[0] == '-l' or opt[0] == '--log':
                     self.logFile= opt[1]
+                if opt[0] == '-P' or opt[0] == '--params':
+                    self.paramsFile= opt[1]
+                    try:
+                        self.params= load_params(opt[1])
+                    except ValueError as why:
+                        print('Error: %s' % why)
+                        sys.exit(-1)
                 if opt[0] == '-v' or opt[0] == '--version':
                     print('%s %s' % (sys.argv[0], version))
                     sys.exit(0)
@@ -566,6 +662,7 @@ class TelemetryLogger():
         self.prev_damage= None
         self.prev_last_lap= None
         self.laps= []               # Completed lap times, s.
+        self.params_note= None      # Optional one-line driver params description.
 
     def log(self, S, R):
         '''S = server state dict (c.S.d), R = driver action dict (c.R.d).'''
@@ -613,6 +710,8 @@ class TelemetryLogger():
 
     def summary(self):
         out= ['===== Run summary (%s) =====' % self.path]
+        if self.params_note:
+            out.append('params:           %s' % self.params_note)
         out.append('steps logged:     %d (~%.1f s)' % (self.steps, self.steps / 50.0))
         if not self.steps:
             out.append('no data received from server.')
@@ -654,48 +753,135 @@ class TelemetryLogger():
         finally:
             print(self.summary())
 
-def drive_example(c):
-    '''This is only an example. It will get around the track but the
-    correct thing to do is write your own `drive()` function.'''
+def drive_example(c, params=None):
+    '''Rule-based driver (spec 0008): target speed from the range finders
+    (braking-distance physics), proportional throttle/brake with ABS and
+    traction control, steering from angle/trackPos, rpm-based gears,
+    off-track and stuck recovery. All tunables come from `params`
+    (default: c.params, set by --params, or DEFAULT_PARAMS).'''
     S,R= c.S.d,c.R.d
-    target_speed=300
+    P= params if params is not None else getattr(c, 'params', DEFAULT_PARAMS)
+    st= c.__dict__.setdefault('_drive_state', {'stuck': 0, 'reverse': 0})
+    speed= S['speedX']          # km/h
+    angle= S['angle']           # rad, > 0 -> track axis is to the left
+    tpos= S['trackPos']         # > 0 -> left of the centre line
+    track= S['track']           # 19 range finders, m (-1 when off track)
+    wsv= S['wheelSpinVel']      # rad/s: FR, FL, RR, RL
 
-    # Steer To Corner
-    R['steer']= S['angle']*15 / PI
-    # Steer To Center
-    R['steer']-= S['trackPos']*.10
+    # -- Stuck detection -> drive in reverse for a while --
+    if st['reverse'] <= 0:
+        if abs(speed) < P['stuck_speed'] and abs(angle) > P['stuck_angle']:
+            st['stuck']+= 1
+        else:
+            st['stuck']= 0
+        if st['stuck'] > int(P['stuck_steps']):
+            st['stuck']= 0
+            st['reverse']= int(P['reverse_steps'])
+    if st['reverse'] > 0:
+        st['reverse']-= 1
+        R['gear']= -1
+        R['steer']= clip(-P['reverse_steer_gain'] * angle, -1, 1)
+        R['accel']= clip(P['reverse_accel'], 0, 1)
+        R['brake']= 0
+        return
 
-    # Throttle Control
-    if S['speedX'] < target_speed - (R['steer']*50):
-        R['accel']+= .01
+    # -- Target speed from the free distance ahead --
+    mid= len(track) // 2
+    k= int(clip(round(P['ahead_halfwidth']), 0, mid))
+    d_ahead= max(track[mid-k:mid+k+1])
+    ray_deg= 0.0  # Direction of the longest ray (ties -> closest to straight ahead).
+    if len(track) == len(TRACK_SENSOR_ANGLES):
+        i_long= max(range(len(track)),
+                    key=lambda i: (track[i], -abs(TRACK_SENSOR_ANGLES[i])))
+        ray_deg= TRACK_SENSOR_ANGLES[i_long]
+    v_c= P['v_corner'] / 3.6                       # m/s
+    v2= v_c*v_c + 2*P['decel']*max(0.0, d_ahead - P['dist_margin'])
+    v_target= math.sqrt(max(0.0, v2)) * 3.6        # km/h
+    v_target-= P['curv_speed_gain'] * abs(ray_deg)
+    v_target= clip(v_target, P['v_min'], P['v_max'])
+    offtrack= abs(tpos) > 1.0
+    if offtrack:
+        v_target= min(v_target, P['offtrack_speed'])
+
+    # -- Steering --
+    pos_gain= P['offtrack_pos_gain'] if offtrack else P['steer_pos_gain']
+    steer= P['steer_angle_gain']*angle - pos_gain*tpos
+    if not offtrack:
+        # Negative sensor angle = left, positive steer = left.
+        steer-= P['steer_ray_gain'] * math.radians(ray_deg)
+    R['steer']= clip(steer, -1, 1)
+
+    # -- Throttle / brake --
+    err= v_target - speed
+    if err < -P['brake_hyst']:
+        accel= 0.0
+        brake= clip(P['brake_gain'] * (-err), 0, 1)
     else:
-        R['accel']-= .01
-    if S['speedX']<10:
-       R['accel']+= 1/(S['speedX']+.1)
+        accel= clip(P['accel_gain'] * (err + P['brake_hyst']), 0, 1)
+        brake= 0.0
+    v_ms= speed / 3.6
+    rf, rr= P['wheel_radius_front'], P['wheel_radius_rear']
+    # ABS: wheel slower than the car -> locking -> release brake.
+    if brake > 0 and speed > max(P['abs_min_speed'], 1.0):
+        radii= [rf, rf, rr, rr]
+        slip= max([(v_ms - wsv[i]*radii[i]) / v_ms for i in range(4)])
+        if slip > P['abs_slip']:
+            brake*= clip(1 - P['abs_gain']*(slip - P['abs_slip']), 0, 1)
+    # TCS: driven (rear) wheels faster than the car -> cut throttle.
+    if accel > 0 and speed > max(P['tcs_min_speed'], 1.0):
+        slip= ((wsv[2] + wsv[3]) / 2 * rr - v_ms) / v_ms
+        if slip > P['tcs_slip']:
+            accel*= clip(1 - P['tcs_gain']*(slip - P['tcs_slip']), 0, 1)
+    R['accel']= accel
+    R['brake']= brake
 
-    # Traction Control System
-    if ((S['wheelSpinVel'][2]+S['wheelSpinVel'][3]) -
-       (S['wheelSpinVel'][0]+S['wheelSpinVel'][1]) > 5):
-       R['accel']-= .2
-
-    # Automatic Transmission
-    R['gear']=1
-    if S['speedX']>50:
-        R['gear']=2
-    if S['speedX']>80:
-        R['gear']=3
-    if S['speedX']>110:
-        R['gear']=4
-    if S['speedX']>140:
-        R['gear']=5
-    if S['speedX']>170:
-        R['gear']=6
+    # -- Automatic transmission by rpm --
+    gear= int(S['gear'])
+    rpm= S['rpm']
+    gear_max= int(clip(round(P['gear_max']), 1, 6))
+    # Learn rpm / rear-wheel speed for the current gear (spec 0017).
+    ratios= st.setdefault('gear_ratio', {})
+    if gear == st.get('gear_prev'):
+        st['gear_steps']= st.get('gear_steps', 0) + 1
+    else:
+        st['gear_steps']= 0
+    st['gear_prev']= gear
+    omega_r= (wsv[2] + wsv[3]) / 2   # rad/s, rear (driven) wheels
+    # rpm / wheel speed stays valid under wheelspin (engine and wheels are coupled);
+    # only right after a shift (clutch slipping) it is not, hence GEAR_LEARN_MIN_STEPS;
+    # under braking near-locked wheels let the engine sit at idle, hence brake == 0.
+    if (gear >= 1 and st['gear_steps'] >= GEAR_LEARN_MIN_STEPS and brake == 0
+            and speed > GEAR_LEARN_MIN_SPEED and omega_r > 1.0):
+        sample= rpm / omega_r
+        old= ratios.get(gear)
+        ratios[gear]= sample if old is None else old + GEAR_LEARN_RATE*(sample - old)
+    omega_car= max(v_ms, 0.0) / rr   # rad/s the rear wheels would have without slip
+    upper= ratios.get(gear + 1)
+    if gear < 1:
+        gear= 1
+    elif (rpm > P['gear_up_rpm'] and gear < gear_max
+            and (upper is None or omega_car * upper >= P['gear_down_rpm'])):
+        # Up unless the next gear would be below the downshift rpm (wheelspin in this
+        # gear inflates rpm; unknown ratio -> allow, the shift then teaches it).
+        gear+= 1
+    elif rpm < P['gear_down_rpm'] and gear > 1:
+        # Down only if the lower gear would not be above the upshift rpm
+        # (unknown ratio -> allow, the shift then teaches it).
+        lower= ratios.get(gear - 1)
+        if lower is None or omega_car * lower < P['gear_up_rpm'] - GEAR_DOWN_MARGIN_RPM:
+            gear-= 1
+    R['gear']= min(gear, gear_max)
     return
 
 # ================ MAIN ================
-if __name__ == "__main__":
-    C= Client(p=3001)
+def main():
+    """Run the team driver. Also called by torcs_jm_par.py (official entry point)."""
+    C= Client() # Port from -p/--port (default 3001); Client(p=3001) overrode -p.
+    params_src= C.paramsFile if C.paramsFile else 'defaults'
+    print('params (%s): %s' % (params_src, json.dumps(C.params, sort_keys=True)))
     logger= TelemetryLogger(C.logFile) if C.logFile else None
+    if logger is not None:
+        logger.params_note= params_src
     try:
         for step in range(C.maxSteps,0,-1):
             C.get_servers_input()
@@ -709,3 +895,6 @@ if __name__ == "__main__":
         if logger is not None:
             logger.close()
     C.shutdown()
+
+if __name__ == "__main__":
+    main()

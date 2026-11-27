@@ -4,8 +4,19 @@
 
 | Дата       | Спека | Автор  | Кратко                                   | Статус |
 |------------|-------|--------|------------------------------------------|--------|
+| 2026-11-27 | [0018](0018-run4-default-params.md) | Hlib   | `DEFAULT_PARAMS` = лучший набор CMA-ES run4 (`params/run4_best.json`, 14 трасс, штраф за урон): скорость как у run3, урон alpine-2 243 → 41, ole-road-1 212 → 112; e-track-1 по-прежнему падает (ошибка `scr_server`); локально Corkscrew 77.11 с | done |
+| 2026-11-27 | [0017](0017-gearbox-wheelspin-hunting.md) | Hlib   | Коробка: при пробуксовке на 1-й больше нет «охоты» 1↔2 (застревание на Corkscrew в 0015); отношения передач учатся на ходу; FITNESS run3 650.87 → 651.00; локально Corkscrew 77.05 с | done |
+| 2026-11-27 | [0016](0016-sim-crash-detection.md) | Hlib   | `fitness.py`: падение TORCS (segfault на e-track-1) ловится за ~1 с → статус `sim_crash` с градуированным баллом вместо `timeout` 10000; флаги `--k-damage`/`--k-offtrack`; план run4 (15 трасс + 5 отложенных) | in-progress |
+| 2026-11-27 | [0015](0015-run3-default-params.md) | Hlib   | `DEFAULT_PARAMS` = лучший набор CMA-ES run3 (`params/run3_best.json`): Corkscrew 76.43 с вместо 106.65; риск — падение TORCS на e-track-1 | in-progress |
+| 2026-11-27 | [0014](0014-livery.md) | Hlib   | Ливрея команды в репо: `livery/car1-ow1.rgb` + PNG-превью и инструкция; `*.rgb`/`*.png` binary в `.gitattributes` | in-progress |
+| 2026-11-27 | [0013](0013-official-entry-point.md) | Hlib   | `python torcs_jm_par.py` (официальная точка входа) запускает наш драйвер через `snakeoil3_gym.main()`; убрана отладочная заглушка | in-progress |
+| 2026-11-27 | [0012](0012-third-party-credits.md) | Hlib   | README: раздел «Third-party code and licenses» (п. 9.3 регламента) — откуда взят чужой код, лицензии, что написано командой | done |
+| 2026-11-26 | [0011](0011-same-car-all-ports.md) | Hlib   | В образе порты 3002–3010 были на `car1-trb1`: `hpc/scr_server.xml` (все слоты `car1-ow1`) + bind в sbatch, проверка портов в gen 0 `train_cma.py` (код 3), шире границы поиска | done |
+| 2026-11-26 | [0010](0010-cma-es-training.md) | Hlib   | `train_cma.py`: CMA-ES по 18 параметрам, 10 параллельных оценок `fitness.py`, контрольные точки; SLURM-задача и установка numpy/cma для PERUN | done |
+| 2026-11-26 | [0009](0009-fitness-evaluator.md) | Hlib   | `fitness.py`: прогон параметров на 8 трассах (`torcs -r`), разбор CSV, один балл `FITNESS`; фикс `-p` в `snakeoil3_gym.py` | done |
+| 2026-11-26 | [0008](0008-brake-and-params.md) | Hlib   | Торможение по дальномерам, ABS/TCS, передачи по rpm, выезд/задний ход; `DEFAULT_PARAMS` + `--params file.json` | done |
 | 2026-11-16 | [0007](0007-branch-workflow.md) | Hlib   | Личные ветки dev/* и слияние в master через PR | done |
-| 2026-11-09 | [0006](0006-telemetry-logger.md) | Hlib   | Логгер телеметрии `--log file.csv` + итоговая сводка заезда | implemented (ждёт заезда) |
+| 2026-11-09 | [0006](0006-telemetry-logger.md) | Hlib   | Логгер телеметрии `--log file.csv` + итоговая сводка; исходный заезд: 234 км/ч, вылет на 426 м без торможения | done |
 | 2026-11-09 | [0005](0005-baseline-run-corkscrew.md) | Hlib   | Исходный заезд: без тормоза — вылет в повороте, круг не пройден | done |
 | 2026-11-09 | [0004](0004-requirements.md) | Hlib   | requirements.txt (numpy, matplotlib), раздел «Окружение» | done |
 | 2026-11-09 | [0003](0003-contributing-guide.md) | Hlib   | CONTRIBUTING.md — правила работы команды | done |

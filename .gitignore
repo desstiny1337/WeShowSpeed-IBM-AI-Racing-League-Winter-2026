@@ -5,3 +5,5 @@ __pycache__/
 !.idea/vcs.xml
 *.log
 runs/
+fitness_runs/
+cma_runs/

@@ -1,0 +1,9 @@
+# Shell scripts, SLURM jobs and apptainer recipes run on Linux: keep LF on every checkout.
+*.sh       text eol=lf
+*.sbatch   text eol=lf
+hpc/*.def  text eol=lf
+hpc/*.xml  text eol=lf
+
+# TORCS textures (SGI .rgb) and previews: never touch line endings.
+*.rgb      binary
+*.png      binary
