@@ -2,6 +2,7 @@
 
 > **WeShowSpeed — IBM AI Racing League, Winter 2026.**
 > Как работать над проектом — [CONTRIBUTING.md](CONTRIBUTING.md). История изменений — [specs/CHANGELOG.md](specs/CHANGELOG.md).
+> Third-party code and licenses — [see below](#third-party-code-and-licenses).
 
 Gym-TORCS is the reinforcement learning (RL) environment in TORCS domain with OpenAI-gym-like interface.
 TORCS is the open-rource realistic car racing simulator recently used as RL benchmark task in several AI studies.
@@ -95,3 +96,40 @@ https://yanpanlau.github.io/2016/10/11/Torcs-Keras.html
 
 # Acknowledgement
 gym_torcs was developed during the spring internship 2016 at Preferred Networks.
+
+# Third-party code and licenses
+
+This repository is a fork of an open-source project and builds on other open-source work.
+Everything not written by our team is listed here.
+
+## Code
+
+| Component | Author / source | License | Where it is used |
+|-----------|-----------------|---------|------------------|
+| gym_torcs | Naoto Yoshida, [ugo-nama-kun/gym_torcs](https://github.com/ugo-nama-kun/gym_torcs) | MIT (see [LICENSE](LICENSE)) | Upstream of this fork: `gym_torcs.py`, `sample_agent.py`, `example_experiment.py`, `autostart.sh` (unchanged) |
+| Snake Oil (Python SCR client) | Chris X Edwards, [xed.ch/project/snakeoil](http://xed.ch/project/snakeoil/index.html); Python 3 port from gym_torcs | see the author's page | `Client`, `ServerState`, `DriverAction` in `snakeoil3_gym.py` (also copied into `snakeoil3_jm2.py`, `jmcncarai.py`) |
+| vtorcs-RL-color | TORCS team, [giuse/vtorcs](https://github.com/giuse/vtorcs), RL patches from gym_torcs | GPL v2 (see [vtorcs-RL-color/COPYING](vtorcs-RL-color/COPYING)) | `vtorcs-RL-color/` (vendored, not modified by us) |
+| SCR server (`scr_server` robot) | Daniele Loiacono et al., Simulated Car Racing championship; package from [ibm-ai-racing/racing-league](https://github.com/ibm-ai-racing/racing-league) | GPL v2 or later | Simulator side; `hpc/scr_server.xml` is its config with all slots set to `car1-ow1` |
+| TORCS 1.3.7 | TORCS team, [fmirus/torcs-1.3.7](https://github.com/fmirus/torcs-1.3.7) | GPL v2 or later | Built inside the HPC container image (`hpc/torcs-env.def`), not stored in this repository |
+
+## Python libraries
+
+| Library | License | Used by |
+|---------|---------|---------|
+| [numpy](https://numpy.org/) | BSD-3-Clause | `train_cma.py`, `sample_agent.py` |
+| [matplotlib](https://matplotlib.org/) | Matplotlib License (PSF-based) | analysis / example agent |
+| [cma (pycma)](https://github.com/CMA-ES/pycma) | BSD-3-Clause | `train_cma.py` (CMA-ES parameter search) |
+| [gym](https://github.com/openai/gym) (optional) | MIT | `gym_torcs.py` only |
+
+The competition driver itself (`snakeoil3_gym.py`) uses only the Python standard library.
+Versions are pinned in [requirements.txt](requirements.txt).
+
+## Written by our team (WeShowSpeed)
+
+- Driving logic in `snakeoil3_gym.py`: `drive_example()` (steering, braking by range finders,
+  ABS/TCS, gear shifting by rpm, recovery), `DEFAULT_PARAMS` / `--params`, telemetry logger `--log`.
+- `fitness.py` — multi-track evaluation of a parameter set; `train_cma.py` — CMA-ES optimizer.
+- `hpc/` — container definition, SLURM scripts and setup for the HPC cluster.
+- Race configs `practice.xml`, `quickrace.xml`; process docs `CONTRIBUTING.md` and `specs/`.
+
+Change history with motivation for each step: [specs/CHANGELOG.md](specs/CHANGELOG.md).
