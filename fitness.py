@@ -56,6 +56,8 @@ K_DAMAGE= 0.01            # s per damage point (1000 damage = 10 s, ~10% of a la
 K_OFFTRACK= 1.0           # s per second spent with |trackPos| > OFFTRACK_TRACKPOS.
 UNFINISHED_PENALTY= 1.0   # unfinished: T + UNFINISHED_PENALTY*(1 - progress)*T (+ penalties).
 FAIL_SCORE= 10000.0       # per track: no CSV / driver error / wall timeout / sim did not start.
+SIM_CRASH_PENALTY= 1.0    # sim_crash (spec 0016): unfinished score + SIM_CRASH_PENALTY*T, so any crash
+                          # is worse than any unfinished/finished run and a later crash beats an earlier one.
 OFFTRACK_TRACKPOS= 1.0    # |trackPos| above this counts as off track (same as the logger).
 FINISH_PROGRESS_MIN= 0.995 # last-lap fallback: progress needed when the final crossing is not logged.
 
@@ -69,7 +71,10 @@ DEFAULT_CONNECT_TIMEOUT= 5.0  # s wall; the driver must connect before this. Mus
                               # ~7 s: after that snakeoil3_gym.py runs `pkill torcs` itself.
 DEFAULT_WALL_TIMEOUT= 120.0   # s wall per track for the driver process.
 KILL_GRACE_S= 3.0         # s to wait after SIGINT/SIGTERM before SIGKILL.
-POLL_S= 0.05              # s between driver status polls.
+POLL_S= 0.05              # s between driver/simulator status polls.
+SIM_EXIT_GRACE_S= 1.0     # s to let the driver exit by itself after the simulator exits; still running
+                          # after that (and no ***shutdown*** seen) = sim_crash.
+SIM_CRASH_MARKER= 'Segmentation fault'  # printed by the `torcs` shell wrapper when torcs-bin crashes.
 MIN_ROWS= 10              # fewer CSV rows than this = no data.
 BASE_PORT= 3001           # scr_server driver idx N listens on BASE_PORT + N.
 MAX_SCR_IDX= 9            # scr_server supports driver idx 0..9.
@@ -165,27 +170,33 @@ def analyze(rows, laps, server_stopped=False):
     return m
 
 
-def score_run(m, laps, time_limit_s, failure=None):
+def score_run(m, laps, time_limit_s, failure=None, k_damage=None, k_offtrack=None):
     '''Return (score, status). `m` = analyze() result or None (no data),
     `time_limit_s` = sim time limit of the run (s), `failure` = infra status
-    ('timeout', 'driver_error', 'no_connect', 'sim_error') or None.'''
-    if failure is not None:
-        return FAIL_SCORE, failure
+    ('timeout', 'driver_error', 'no_connect', 'sim_error', 'sim_crash') or None.
+    `k_damage`/`k_offtrack` override K_DAMAGE/K_OFFTRACK when not None.'''
+    if failure is not None and not (failure == 'sim_crash' and m is not None):
+        return FAIL_SCORE, failure  # sim_crash with data is graded below
     if m is None:
         return FAIL_SCORE, 'no_data'
-    penalty= K_DAMAGE * m['damage'] + K_OFFTRACK * m['offtrack_s']
+    kd= K_DAMAGE if k_damage is None else k_damage
+    ko= K_OFFTRACK if k_offtrack is None else k_offtrack
+    penalty= kd * m['damage'] + ko * m['offtrack_s']
+    base= time_limit_s + UNFINISHED_PENALTY * (1.0 - m['progress']) * time_limit_s
+    if failure == 'sim_crash':
+        return base + SIM_CRASH_PENALTY * time_limit_s + penalty, 'sim_crash'
     if m['laps_done'] >= laps:
         return m['lap_time_total'] + penalty, 'finished'
-    base= time_limit_s + UNFINISHED_PENALTY * (1.0 - m['progress']) * time_limit_s
     return base + penalty, 'unfinished'
 
 
-def evaluate_csv(path, laps, time_limit_s, server_stopped=False, failure=None):
+def evaluate_csv(path, laps, time_limit_s, server_stopped=False, failure=None,
+                 k_damage=None, k_offtrack=None):
     '''Read + analyze + score one CSV. Returns a metrics dict with
     'score' and 'status'.'''
     rows= read_telemetry(path)
     m= analyze(rows, laps, server_stopped) if rows is not None and len(rows) >= MIN_ROWS else None
-    score, status= score_run(m, laps, time_limit_s, failure)
+    score, status= score_run(m, laps, time_limit_s, failure, k_damage, k_offtrack)
     out= dict(m) if m else {}
     out.update({'score': score, 'status': status, 'time_limit_s': time_limit_s})
     return out
@@ -328,8 +339,20 @@ def run_track(args, cat, name, template_text, workdir, port):
         if failure is None:
             drv= popen(drv_cmd, drv_log, workdir)
             t_drv= time.monotonic()
+            t_sim_exit= None
             while drv.poll() is None:
-                el= time.monotonic() - t_drv
+                now= time.monotonic()
+                el= now - t_drv
+                # Simulator gone while the driver still waits for data (spec 0016): the
+                # driver would block in recvfrom until the wall timeout. A normal race end
+                # also stops the simulator, so give the driver a short grace to exit itself.
+                if t_sim_exit is None and sim.poll() is not None:
+                    t_sim_exit= now
+                if (t_sim_exit is not None and now - t_sim_exit > SIM_EXIT_GRACE_S
+                        and 'Server has stopped the race' not in read_text(drv_log)):
+                    # Before the connection it is a start problem (log marker still wins below).
+                    failure= 'sim_crash' if connected else 'sim_error'
+                    break
                 if not connected:
                     connected= 'Client connected' in read_text(drv_log)
                     if not connected and el > args.connect_timeout:
@@ -346,13 +369,17 @@ def run_track(args, cat, name, template_text, workdir, port):
         stop(drv, signal.SIGINT)
         stop(sim, signal.SIGTERM)
     wall= time.monotonic() - t0
+    sim_exit_code= sim.returncode if sim is not None else None
 
+    if SIM_CRASH_MARKER in read_text(sim_log):
+        failure= 'sim_crash'
     server_stopped= 'Server has stopped the race' in read_text(drv_log)
-    res= evaluate_csv(csv_path, args.laps, score_limit_s, server_stopped, failure)
+    res= evaluate_csv(csv_path, args.laps, score_limit_s, server_stopped, failure,
+                      args.k_damage, args.k_offtrack)
     res.update({'track': '%s/%s' % (cat, name), 'wall_s': wall, 'max_steps': max_steps,
-                'server_stopped': server_stopped})
+                'server_stopped': server_stopped, 'sim_exit_code': sim_exit_code})
     if failure is not None and os.path.exists(csv_path):
-        # Keep the partial metrics for diagnostics, the score stays FAIL_SCORE.
+        # Keep the partial metrics for diagnostics (score stays FAIL_SCORE unless sim_crash).
         rows= read_telemetry(csv_path)
         if rows and len(rows) >= MIN_ROWS:
             partial= analyze(rows, args.laps, server_stopped)
@@ -390,9 +417,13 @@ def write_json(path, data):
     os.replace(tmp, path)
 
 
-def constants():
-    return {'K_DAMAGE': K_DAMAGE, 'K_OFFTRACK': K_OFFTRACK, 'UNFINISHED_PENALTY': UNFINISHED_PENALTY,
-            'FAIL_SCORE': FAIL_SCORE, 'OFFTRACK_TRACKPOS': OFFTRACK_TRACKPOS,
+def constants(args=None):
+    '''Scoring constants; K_DAMAGE/K_OFFTRACK are the effective values (CLI overrides).'''
+    kd= args.k_damage if args is not None and args.k_damage is not None else K_DAMAGE
+    ko= args.k_offtrack if args is not None and args.k_offtrack is not None else K_OFFTRACK
+    return {'K_DAMAGE': kd, 'K_OFFTRACK': ko, 'UNFINISHED_PENALTY': UNFINISHED_PENALTY,
+            'FAIL_SCORE': FAIL_SCORE, 'SIM_CRASH_PENALTY': SIM_CRASH_PENALTY,
+            'SIM_EXIT_GRACE_S': SIM_EXIT_GRACE_S, 'OFFTRACK_TRACKPOS': OFFTRACK_TRACKPOS,
             'FINISH_PROGRESS_MIN': FINISH_PROGRESS_MIN, 'START_MARGIN_S': START_MARGIN_S}
 
 
@@ -438,6 +469,10 @@ def build_parser():
                     help='s wall for the driver to connect [%(default)s]')
     ap.add_argument('--wall-timeout', type=float, default=DEFAULT_WALL_TIMEOUT,
                     help='s wall per track for the driver [%(default)s]')
+    ap.add_argument('--k-damage', type=float, default=None,
+                    help='score s per damage point [%s]' % K_DAMAGE)
+    ap.add_argument('--k-offtrack', type=float, default=None,
+                    help='score s per second off track [%s]' % K_OFFTRACK)
     ap.add_argument('--keep-logs', action='store_true', help='keep race xml, CSV and logs in workdir')
     ap.add_argument('--score-csv', action='append', metavar='CSV',
                     help='offline: score an existing telemetry CSV (repeatable), no simulator')
@@ -451,12 +486,15 @@ def main(argv=None):
         ap.error('--laps must be >= 1')
     if args.max_lap_time <= 0:
         ap.error('--max-lap-time must be > 0')
+    for opt, val in (('--k-damage', args.k_damage), ('--k-offtrack', args.k_offtrack)):
+        if val is not None and not (math.isfinite(val) and val >= 0):
+            ap.error('%s must be a finite number >= 0' % opt)
 
     if args.score_csv:
         limit_s= args.laps * args.max_lap_time + START_MARGIN_S
         results= []
         for p in args.score_csv:
-            r= evaluate_csv(p, args.laps, limit_s)
+            r= evaluate_csv(p, args.laps, limit_s, k_damage=args.k_damage, k_offtrack=args.k_offtrack)
             r.update({'track': os.path.basename(p), 'laps': args.laps})
             results.append(r)
             print(fmt_line(r))
@@ -464,7 +502,7 @@ def main(argv=None):
         print('FITNESS %.6f' % total)
         if args.out:
             write_json(os.path.abspath(args.out), {'mode': 'score-csv', 'laps': args.laps,
-                       'constants': constants(), 'tracks': results, 'fitness': total})
+                       'constants': constants(args), 'tracks': results, 'fitness': total})
         return 0
 
     if not args.params:
@@ -524,7 +562,7 @@ def main(argv=None):
         'sim': args.sim,
         'max_lap_time': args.max_lap_time,
         'time_limit_factor': args.time_limit_factor,
-        'constants': constants(),
+        'constants': constants(args),
         'tracks': results,
         'fitness': total,
         'started': time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(t0)),
