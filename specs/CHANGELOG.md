@@ -4,6 +4,7 @@
 
 | Дата       | Спека | Автор  | Кратко                                   | Статус |
 |------------|-------|--------|------------------------------------------|--------|
+| 2026-11-27 | [0013](0013-official-entry-point.md) | Hlib   | `python torcs_jm_par.py` (официальная точка входа) запускает наш драйвер через `snakeoil3_gym.main()`; убрана отладочная заглушка | in-progress |
 | 2026-11-27 | [0012](0012-third-party-credits.md) | Hlib   | README: раздел «Third-party code and licenses» (п. 9.3 регламента) — откуда взят чужой код, лицензии, что написано командой | done |
 | 2026-11-26 | [0011](0011-same-car-all-ports.md) | Hlib   | В образе порты 3002–3010 были на `car1-trb1`: `hpc/scr_server.xml` (все слоты `car1-ow1`) + bind в sbatch, проверка портов в gen 0 `train_cma.py` (код 3), шире границы поиска | done |
 | 2026-11-26 | [0010](0010-cma-es-training.md) | Hlib   | `train_cma.py`: CMA-ES по 18 параметрам, 10 параллельных оценок `fitness.py`, контрольные точки; SLURM-задача и установка numpy/cma для PERUN | done |

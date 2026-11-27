@@ -833,7 +833,8 @@ def drive_example(c, params=None):
     return
 
 # ================ MAIN ================
-if __name__ == "__main__":
+def main():
+    """Run the team driver. Also called by torcs_jm_par.py (official entry point)."""
     C= Client() # Port from -p/--port (default 3001); Client(p=3001) overrode -p.
     params_src= C.paramsFile if C.paramsFile else 'defaults'
     print('params (%s): %s' % (params_src, json.dumps(C.params, sort_keys=True)))
@@ -853,3 +854,6 @@ if __name__ == "__main__":
         if logger is not None:
             logger.close()
     C.shutdown()
+
+if __name__ == "__main__":
+    main()

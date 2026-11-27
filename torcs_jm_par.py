@@ -5,9 +5,7 @@ import getopt
 import os
 import time
 
-print("!!! THIS FILE IS RUNNING !!!")
-
-PI= 3.14159265359
+PI=3.14159265359
 
 data_size = 2**17
 
@@ -543,28 +541,10 @@ def traction_control(S, accel):
 #     R['gear'] = shift_gears(S)
 #     return
 
-def drive_modular(c):
-    S, R = c.S.d, c.R.d
-
-    print("DRIVE_MODULAR IS RUNNING")
-
-    R['steer'] = 1.0
-    R['accel'] = 0.4
-    R['brake'] = 0.0
-    R['gear'] = 1
-    return
-
 # ================= MAIN LOOP =================
+# The official starter instructions run `python torcs_jm_par.py`.
+# Our team driver lives in snakeoil3_gym.py (drive_example), so this entry point
+# runs it. Command-line options are the same: -p PORT, --log FILE, --params FILE, -m STEPS.
 if __name__ == "__main__":
-    print("RUNNING MODULAR VERSION")
-    print("TARGET_SPEED =", TARGET_SPEED)
-    print("STEER_GAIN =", STEER_GAIN)
-    print("CENTERING_GAIN =", CENTERING_GAIN)
-    print("BRAKE_THRESHOLD =", BRAKE_THRESHOLD)
-
-    C = Client(p=3001)
-    for step in range(C.maxSteps, 0, -1):
-        C.get_servers_input()
-        drive_modular(C)
-        C.respond_to_server()
-    C.shutdown()
+    import snakeoil3_gym
+    snakeoil3_gym.main()

@@ -3,6 +3,10 @@
 > **WeShowSpeed — IBM AI Racing League, Winter 2026.**
 > Как работать над проектом — [CONTRIBUTING.md](CONTRIBUTING.md). История изменений — [specs/CHANGELOG.md](specs/CHANGELOG.md).
 > Third-party code and licenses — [see below](#third-party-code-and-licenses).
+>
+> **How to run our car:** start TORCS (Race → Practice → New Race, driver `scr_server`), then
+> `python torcs_jm_par.py` (official entry point, port 3001). It runs our driver `drive_example()`
+> from `snakeoil3_gym.py`; `python snakeoil3_gym.py` does the same. Options: `-p PORT`, `--params FILE`, `--log FILE`.
 
 Gym-TORCS is the reinforcement learning (RL) environment in TORCS domain with OpenAI-gym-like interface.
 TORCS is the open-rource realistic car racing simulator recently used as RL benchmark task in several AI studies.
