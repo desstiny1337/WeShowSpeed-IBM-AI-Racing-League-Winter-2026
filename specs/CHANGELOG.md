@@ -4,6 +4,7 @@
 
 | Дата       | Спека | Автор  | Кратко                                   | Статус |
 |------------|-------|--------|------------------------------------------|--------|
+| 2026-11-27 | [0018](0018-run4-default-params.md) | Hlib   | `DEFAULT_PARAMS` = лучший набор CMA-ES run4 (`params/run4_best.json`, 14 трасс, штраф за урон): скорость как у run3, урон alpine-2 243 → 41, ole-road-1 212 → 112; e-track-1 по-прежнему падает (ошибка `scr_server`) | in-progress |
 | 2026-11-27 | [0017](0017-gearbox-wheelspin-hunting.md) | Hlib   | Коробка: при пробуксовке на 1-й больше нет «охоты» 1↔2 (застревание на Corkscrew в 0015); отношения передач учатся на ходу; FITNESS run3 650.87 → 651.00; локально Corkscrew 77.05 с | done |
 | 2026-11-27 | [0016](0016-sim-crash-detection.md) | Hlib   | `fitness.py`: падение TORCS (segfault на e-track-1) ловится за ~1 с → статус `sim_crash` с градуированным баллом вместо `timeout` 10000; флаги `--k-damage`/`--k-offtrack`; план run4 (15 трасс + 5 отложенных) | in-progress |
 | 2026-11-27 | [0015](0015-run3-default-params.md) | Hlib   | `DEFAULT_PARAMS` = лучший набор CMA-ES run3 (`params/run3_best.json`): Corkscrew 76.43 с вместо 106.65; риск — падение TORCS на e-track-1 | in-progress |
