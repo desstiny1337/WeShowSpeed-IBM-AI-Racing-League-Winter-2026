@@ -6,7 +6,7 @@
 | Автор   | Hlib                              |
 | Дата    | 2026-11-27                        |
 | Файлы   | `torcs_jm_par.py`, `snakeoil3_gym.py`, `README.md` |
-| Коммиты | (заполняет git-агент)             |
+| Коммиты | `de660d2`                         |
 
 ## Запрос / мотивация
 Официальный Windows Setup Guide организаторов (`installation/windows` в `ibm-ai-racing/racing-league`)
