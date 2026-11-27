@@ -70,41 +70,42 @@ LOG_FLUSH_EVERY= 50       # Flush CSV to disk every N rows (50 rows ~ 1 s of dri
 OFFTRACK_TRACKPOS= 1.0    # |trackPos| above this counts as off track.
 LOG_TRACK_AHEAD_IDX= 9    # Index of the straight-ahead range finder in 'track' (0 deg).
 
-# == Driver parameters (spec 0008) ==
+# == Driver parameters (spec 0008; values from CMA-ES run3, spec 0015) ==
 # Every tunable number of drive_example() lives here. Override any subset with
-# --params <file.json> (see params/default.json). Units: speeds km/h, distances m.
+# --params <file.json>. params/run3_best.json = these values; params/default.json =
+# the hand-tuned spec 0008 baseline (training reference). Units: speeds km/h, distances m.
 DEFAULT_PARAMS= {
     # -- Target speed from the track range finders --
     'v_max': 300.0,             # km/h, upper clamp of the target speed.
     'v_min': 50.0,              # km/h, lower clamp of the target speed while on track.
-    'v_corner': 80.0,           # km/h, speed we want to have when reaching the obstacle seen ahead.
-    'decel': 12.0,              # m/s^2, assumed braking deceleration in v^2 = v_corner^2 + 2*decel*d.
-    'dist_margin': 15.0,        # m, safety margin subtracted from the free distance ahead.
-    'ahead_halfwidth': 2,       # int, distance ahead = max(track[9-k .. 9+k]) (k=2 -> +-1 deg).
-    'curv_speed_gain': 0.0,     # km/h subtracted per degree of the longest-ray direction (0 = off).
+    'v_corner': 54.35621338588633,           # km/h, speed we want to have when reaching the obstacle seen ahead.
+    'decel': 28.3605300209407,              # m/s^2, assumed braking deceleration in v^2 = v_corner^2 + 2*decel*d.
+    'dist_margin': 15.49652630533352,        # m, safety margin subtracted from the free distance ahead.
+    'ahead_halfwidth': 5,       # int, distance ahead = max(track[9-k .. 9+k]) (k=2 -> +-1 deg).
+    'curv_speed_gain': 0.0005231282421571572,     # km/h subtracted per degree of the longest-ray direction (0 = off).
     # -- Throttle / brake --
-    'accel_gain': 0.1,          # throttle per km/h below (target + brake_hyst).
-    'brake_gain': 0.1,          # brake per km/h above target (10 km/h over -> full brake).
+    'accel_gain': 0.16149262806789622,          # throttle per km/h below (target + brake_hyst).
+    'brake_gain': 0.1921272139692896,          # brake per km/h above target (10 km/h over -> full brake).
     'brake_hyst': 2.0,          # km/h, dead band above target before braking starts.
     'wheel_radius_front': 0.3024,  # m, car1-ow1 front wheel (12" rim + 150 mm tyre).
     'wheel_radius_rear': 0.3151,   # m, car1-ow1 rear wheel (13" rim + 150 mm tyre).
-    'abs_slip': 0.15,           # ABS: wheel slip (v_car - v_wheel)/v_car above which brake is reduced.
-    'abs_gain': 3.0,            # ABS: brake *= 1 - abs_gain*(slip - abs_slip), clipped to 0..1.
+    'abs_slip': 0.10130232251744714,           # ABS: wheel slip (v_car - v_wheel)/v_car above which brake is reduced.
+    'abs_gain': 4.760458816779883,            # ABS: brake *= 1 - abs_gain*(slip - abs_slip), clipped to 0..1.
     'abs_min_speed': 10.0,      # km/h, ABS is off below this speed.
-    'tcs_slip': 0.15,           # TCS: rear slip (v_wheel - v_car)/v_car above which throttle is reduced.
-    'tcs_gain': 3.0,            # TCS: accel *= 1 - tcs_gain*(slip - tcs_slip), clipped to 0..1.
+    'tcs_slip': 0.10168919372643177,           # TCS: rear slip (v_wheel - v_car)/v_car above which throttle is reduced.
+    'tcs_gain': 3.6047159720821402,            # TCS: accel *= 1 - tcs_gain*(slip - tcs_slip), clipped to 0..1.
     'tcs_min_speed': 10.0,      # km/h, TCS is off below this speed (lets the car launch).
     # -- Steering (steer > 0 = left) --
-    'steer_angle_gain': 4.775,  # steer per rad of 'angle' (old value 15/PI).
-    'steer_pos_gain': 0.10,     # steer per unit of trackPos (pulls to the centre).
-    'steer_ray_gain': 0.0,      # steer per rad toward the longest range finder (0 = off).
+    'steer_angle_gain': 1.5078669698166576,  # steer per rad of 'angle' (old value 15/PI).
+    'steer_pos_gain': 0.06910817065464368,     # steer per unit of trackPos (pulls to the centre).
+    'steer_ray_gain': 2.9920455755973583,      # steer per rad toward the longest range finder (0 = off).
     # -- Gears (by rpm; car1-ow1 rev limiter 18700) --
-    'gear_up_rpm': 17500.0,     # shift up above this rpm.
-    'gear_down_rpm': 11000.0,   # shift down below this rpm.
+    'gear_up_rpm': 18599.999596726782,     # shift up above this rpm.
+    'gear_down_rpm': 11583.292095280738,   # shift down below this rpm.
     'gear_max': 6,              # int, highest gear used (1..6).
     # -- Off-track recovery (|trackPos| > 1) --
-    'offtrack_speed': 50.0,     # km/h, target speed cap while off track.
-    'offtrack_pos_gain': 0.5,   # steer per unit of trackPos while off track (replaces steer_pos_gain).
+    'offtrack_speed': 85.71919433019644,     # km/h, target speed cap while off track.
+    'offtrack_pos_gain': 0.4279832923785757,   # steer per unit of trackPos while off track (replaces steer_pos_gain).
     # -- Stuck recovery (reverse) --
     'stuck_speed': 5.0,         # km/h, |speedX| below this counts as not moving.
     'stuck_angle': 0.5236,      # rad (30 deg), |angle| above this counts as badly turned.

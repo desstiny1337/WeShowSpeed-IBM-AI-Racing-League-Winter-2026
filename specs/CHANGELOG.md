@@ -4,6 +4,7 @@
 
 | Дата       | Спека | Автор  | Кратко                                   | Статус |
 |------------|-------|--------|------------------------------------------|--------|
+| 2026-11-27 | [0015](0015-run3-default-params.md) | Hlib   | `DEFAULT_PARAMS` = лучший набор CMA-ES run3 (`params/run3_best.json`): Corkscrew 76.43 с вместо 106.65; риск — падение TORCS на e-track-1 | in-progress |
 | 2026-11-27 | [0014](0014-livery.md) | Hlib   | Ливрея команды в репо: `livery/car1-ow1.rgb` + PNG-превью и инструкция; `*.rgb`/`*.png` binary в `.gitattributes` | in-progress |
 | 2026-11-27 | [0013](0013-official-entry-point.md) | Hlib   | `python torcs_jm_par.py` (официальная точка входа) запускает наш драйвер через `snakeoil3_gym.main()`; убрана отладочная заглушка | in-progress |
 | 2026-11-27 | [0012](0012-third-party-credits.md) | Hlib   | README: раздел «Third-party code and licenses» (п. 9.3 регламента) — откуда взят чужой код, лицензии, что написано командой | done |
